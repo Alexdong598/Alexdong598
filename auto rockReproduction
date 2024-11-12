@@ -1,0 +1,130 @@
+import os
+import hou
+from PySide2 import QtWidgets, QtCore
+
+class AutoRockReproductionUI(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super(AutoRockReproductionUI, self).__init__(parent)
+        self.setWindowFlags(QtCore.Qt.Window)
+        self.initUI()
+
+    def initUI(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        # 创建 QLabel 和 QLineEdit 对象
+        self.parentNodeLabel = QtWidgets.QLabel("Select the SOP path:")
+        self.parentNodeLineEdit = QtWidgets.QLineEdit("/obj/innerTerrain")
+
+        self.rockInputLabel = QtWidgets.QLabel("Name the output folder name:")
+        self.rockInputLineEdit = QtWidgets.QLineEdit("rockInput")
+
+        self.iterationLabel = QtWidgets.QLabel("How many geos in total:")
+        self.iterationLineEdit = QtWidgets.QLineEdit("40")
+
+        self.executeButton = QtWidgets.QPushButton("Execute")
+        self.executeButton.clicked.connect(self.onExecute)
+
+        # 将控件添加到布局中
+        layout.addWidget(self.parentNodeLabel)
+        layout.addWidget(self.parentNodeLineEdit)
+        layout.addWidget(self.rockInputLabel)
+        layout.addWidget(self.rockInputLineEdit)
+        layout.addWidget(self.iterationLabel)
+        layout.addWidget(self.iterationLineEdit)
+        layout.addWidget(self.executeButton)
+
+        self.setLayout(layout)
+        self.setWindowTitle("Auto Rock Reproduction")
+        self.resize(400, 200)
+
+    def onExecute(self):
+        # 从界面获取用户输入的值
+        parent_node_path = self.parentNodeLineEdit.text().strip()
+        rockInput_node_name = self.rockInputLineEdit.text().strip()
+        iteration_text = self.iterationLineEdit.text().strip()
+
+        # 检查输入的有效性
+        if not parent_node_path or not rockInput_node_name or not iteration_text:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "All fields must be filled.")
+            return
+
+        try:
+            iteration = int(iteration_text)
+            if iteration <= 0:
+                raise ValueError("Iteration count must be positive.")
+        except ValueError as e:
+            QtWidgets.QMessageBox.warning(self, "Input Error", f"Invalid iteration count: {e}")
+            return
+
+        # 执行原始脚本的逻辑
+        parent_node = hou.node(parent_node_path)
+        if not parent_node:
+            hou.ui.displayMessage(f"Invalid parent node path: {parent_node_path}")
+            return
+
+        rockInput_node = parent_node.node(rockInput_node_name)
+        if not rockInput_node:
+            hou.ui.displayMessage(f"No rockInput node found with name: {rockInput_node_name}")
+            return
+
+        # 创建 ropnet 节点
+        ropnet = parent_node.createNode("ropnet", "rop_rockReproduction_cache")
+        ropnet.moveToGoodPosition()
+
+        # 创建 blast 节点
+        blast_nodes = []
+        for i in range(1, iteration + 1):
+            blast = parent_node.createNode("blast")
+            blast.parm("group").set(f"@class={i}")
+            blast.parm("negate").set(1)
+            blast.moveToGoodPosition()
+            blast_nodes.append(blast)
+
+        # 获取 rockReproduction 节点
+        original_node = parent_node.node('rockReproduction')
+        if not original_node:
+            hou.ui.displayMessage("Node 'rockReproduction' not found in the specified path.")
+            return
+
+        cache_nodes = []
+
+        # 创建副本并连接到 blast 节点
+        for i in range(1, iteration + 1):
+            copy_node = original_node.copyTo(parent_node)
+            copy_node.setName(f'rockReproduction{i}')
+            blast_node = blast_nodes[i - 1]
+            copy_node.setInput(0, blast_node)
+
+            filecache = parent_node.createNode("filecache")
+            filecache.setName(f'rockReproduction{i}_cache')
+            filecache.parm("timedependent").set(0)
+
+            baseName = f"$HIPNAME_yud.{rockInput_node_name}_rockReproduction{i}_cache"
+            baseFolder = "$HIP/geo"
+            filecache.parm("basename").set(baseName)
+            filecache.parm("basedir").set(baseFolder)
+            filecache.parm("version").set(1)
+            filecache.setInput(0, copy_node)
+
+            geometry = ropnet.createNode("geometry")
+            geometry.setName(f"rop_rockReproduction{i}_cache")
+            geometry.parm("soppath").set(f"../../{filecache.name()}")
+            geometry.parm("sopoutput").set(f"{baseFolder}/{baseName}.bgeo.sc")
+
+            cache_nodes.append(geometry)
+
+            if i > 1:
+                previous_node = cache_nodes[i - 2]
+                present_node = cache_nodes[i - 1]
+                present_node.setInput(0, previous_node)
+
+        parent_node.layoutChildren()
+        hou.ui.displayMessage("Nodes successfully copied and connected.")
+
+def show_auto_rock_reproduction_ui():
+    main_window = hou.ui.mainQtWindow()
+    auto_rock_ui = AutoRockReproductionUI(parent=main_window)
+    auto_rock_ui.show()
+
+# 在 Houdini 中运行这个函数来展示自定义 UI
+show_auto_rock_reproduction_ui()
