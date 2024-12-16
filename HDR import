@@ -1,0 +1,167 @@
+import os
+import sys
+import math
+
+from hutil.Qt import QtCore, QtUiTools, QtWidgets, QtGui
+from PIL import Image
+
+
+def onCreateInterface():
+    global mainWidget
+    global table
+    global slider
+    global percent
+    global sbox
+
+    # load the interface layout from the .ui file.
+    ui_file_path = "C:/Program Files/PySide6/HDR_import_UI.ui"
+    loader = QtUiTools.QUiLoader()
+    ui_file = QtCore.QFile(ui_file_path)
+    ui_file.open(QtCore.QFile.ReadOnly)
+    #UI elements
+    mainWidget = loader.load(ui_file)
+    table = mainWidget.tbl_hdr
+    slider = mainWidget.slider
+    percent = mainWidget.percent
+    sbox = mainWidget.sbox_amount
+    # Trigger function based on user choice
+
+    mainWidget.btn_explore.clicked.connect(btnexplore)
+    mainWidget.btn_import.clicked.connect(btnimport)
+    mainWidget.btn_generate.clicked.connect(btngenerate)
+
+    sbox.valueChanged.connect(ui_update)
+    slider.valueChanged.connect(ui_update)
+
+    ui_update()
+    table.setShowGrid(0)
+    table.setCornerButtonEnabled(0)
+    labels = tuple("                  ")
+    table.setVerticalHeaderLabels(labels)
+    table.setHorizontalHeaderLabels(labels)
+
+    return mainWidget
+
+
+def btngenerate():
+    path = mainWidget.lineE_path.text()
+    data = os.listdir(path)
+    hdr = []
+    for x in data:
+        if ".exr" in x:
+            jpg = x + "_thumb.jpg"
+            if jpg in data:
+                pass
+            else:
+                fullpath = path + "/" + x
+                hdr.append(fullpath)
+    for h in hdr:
+        converter(h)
+        print(h)
+        break
+
+
+def converter(path):
+    # create nodes
+    cop = hou.node("/img")
+    img = cop.createNode("img")
+    file = img.createNode("file")
+    rop = img.createNode("rop_comp")
+    rop.setInput(0, file)
+
+    # Ensure the parameters are correctly defined
+    try:
+        file.parm("filename1").set(path)
+        file.cook()  # To get the resolution
+        wid, hgt = file.xRes(), file.yRes()
+        file.parm("overridesize").set(2)
+        ratio = wid / hgt
+        maxwid = 1024
+        maxhgt = maxwid / ratio
+        file.parm("size1").set(maxwid)
+        file.parm("size2").set(maxhgt)
+
+        # Set rop_comp parameters
+        jpgpath = path.split(".")[0] + "_thumb.jpg"
+        rop.parm("copoutput").set(jpgpath)
+        rop.parm("trange").set("off")
+        rop.parm("execute").pressButton()
+    finally:
+        img.destroy()
+
+
+def btnexplore():
+    path = mainWidget.lineE_path.text()
+    mysel = hou.ui.selectFile(start_directory=path, title="Choose a browsing directory",
+                              file_type=hou.fileType.Directory)
+    mainWidget.lineE_path.setText(mysel)
+
+    ui_update()
+
+
+def ui_update():
+    path = mainWidget.lineE_path.text()
+    data = os.listdir(path)
+    mult = slider.value()*0.01
+    maxColumn = sbox.value()
+    text = str(slider.value())+"%"
+    percent.setText(text)
+
+    hdr = []
+    jpg = []
+    for x in data:
+        if ".exr" in x:
+            hdr.append(x)
+        if ".jpg" in x:
+            jpg.append(x)
+
+    amount = len(hdr)
+    column = maxColumn
+    row = math.ceil(amount / column)
+
+    table.setRowCount(row)
+    table.setColumnCount(column)
+
+    count = 0
+
+    for x in hdr:
+        fullpath = path + "/" + x
+        row = int(count / column)
+        col = count % column
+        item = QtWidgets.QTableWidgetItem(x)
+        item.setData(QtCore.Qt.UserRole, fullpath)
+        table.setItem(row, col, item)
+        count += 1
+
+        jpgname = x.split(".")[0] + "_thumb.jpg"
+        if jpgname in jpg:
+            jpgpath = path + "/" + jpgname
+            icon = QtGui.QIcon(jpgpath)
+            item.setIcon(icon)
+            #set icon size
+            img = Image.open(jpgpath)
+
+            sizex, sizey = img.size[0]*mult, img.size[1]*mult
+            size = QtCore.QSize(sizex, sizey)
+            table.setIconSize(size)
+
+        else:
+            item.setText(x)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        header = table.verticalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+
+
+def btnimport():
+    obj = hou.node("/obj")
+    item = table.selectedItems()
+    for i in item:
+        fullpath = i.data(QtCore.Qt.UserRole)
+        name = fullpath.split("/")[-1].split(".")[0]
+        envlight = obj.createNode("envlight")
+        envlight.parm("env_map").set(fullpath)
+        envlight.moveToGoodPosition()
